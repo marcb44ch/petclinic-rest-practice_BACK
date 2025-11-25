@@ -1,82 +1,146 @@
 pipeline {
     agent any
-    
+
     tools {
         maven 'my-maven'
         jdk 'my-jdk'
-    }
-    
+
     environment {
-        SONAR_TOKEN = credentials('sonar-token')
+        SONAR_SERVER_NAME = 'sonar-server'
+        SONAR_SCANNER = tool 'my-sonar-scanner'
     }
-    
+
     stages {
         stage('Checkout') {
             steps {
-                echo 'Clonant repositori...'
                 checkout scm
             }
         }
-        
-        stage('Build & Tests') {
+
+        stage('Build & Unit Tests') {
             steps {
-                echo 'Compilant i executant tests...'
-                bat 'mvn clean verify'
+                sh '''
+                    echo "=== Compilando y ejecutando tests unitarios ==="
+                    mvn clean compile test -q
+                '''
             }
             post {
                 always {
-                    junit '**/target/surefire-reports/*.xml'
+                    // Publicar resultados de tests JUnit
+                    junit 'target/surefire-reports/**/*.xml'
                 }
             }
         }
-        
-        stage('Coverage') {
+
+        stage('Integration Tests & Coverage') {
             steps {
-                echo 'Generant informe de cobertura...'
-                bat 'mvn jacoco:report'
+                sh '''
+                    echo "=== Ejecutando tests de integración y generando cobertura ==="
+                    mvn verify -q
+                    mvn jacoco:report -q
+                '''
             }
             post {
                 always {
-                    publishHTML([
-                        reportDir: 'target/site/jacoco',
-                        reportFiles: 'index.html',
-                        reportName: 'Jacoco Coverage Report'
-                    ])
-                    archiveArtifacts artifacts: 'target/site/jacoco/**/*', fingerprint: true
+                    // Archivar reporte de cobertura Jacoco
+                    archiveArtifacts artifacts: 'target/site/jacoco/**/*', allowEmptyArchive: false
+                    
+                    // Publicar reporte de cobertura (opcional, para visualización en Jenkins)
+                    jacoco(
+                        execPattern: 'target/jacoco.exec',
+                        classPattern: 'target/classes',
+                        sourcePattern: 'src/main/java',
+                        exclusionPattern: 'src/test*'
+                    )
                 }
             }
         }
-        
-        stage('SonarQube Scan') {
+
+        stage('SonarQube Analysis') {
             steps {
-                echo 'Analitzant qualitat del codi...'
-                withSonarQubeEnv('SonarQube') {
-                    bat "sonar-scanner -Dsonar.projectKey=petclinic-backend -Dsonar.login=${SONAR_TOKEN}"
+                script {
+                    sh '''
+                        echo "=== Verificando herramientas ==="
+                        echo "Java:"
+                        java -version
+                        echo "Maven:"
+                        mvn -v
+                        echo "SonarScanner:"
+                        ls -la "${SONAR_SCANNER}" || echo "No se pudo acceder a SONAR_SCANNER"
+                        
+                        echo "=== Verificando reportes generados ==="
+                        ls -la target/site/jacoco/ || echo "No existe directorio jacoco"
+                        ls -la target/surefire-reports/ || echo "No existe directorio surefire-reports"
+                    '''
+                }
+                withSonarQubeEnv(SONAR_SERVER_NAME) {
+                    sh '''
+                        echo "=== Ejecutando análisis SonarQube ==="
+                        # Opción 1: Usar sonar-scanner directamente (recomendado)
+                        "${SONAR_SCANNER}/bin/sonar-scanner" -X
+                        
+                        # Opción 2: Usar Maven (alternativa)
+                        # mvn sonar:sonar -Dsonar.token=${SONAR_AUTH_TOKEN}
+                    '''
                 }
             }
         }
-        
+
         stage('Quality Gate') {
             steps {
                 script {
-                    echo "⏳ Esperant que SonarQube sincronitzi l'estat de l'anàlisi..."
+                    echo "⏳ Esperando que SonarQube sincronice el estado del análisis..."
                     
-                    // Espera LLARGA - 5-7 minuts
-                    sleep 300 // 5 minuts
-                    timeout(time: 5, unit: 'MINUTES') {
+                    // Espera larga para sincronización
+                    sleep 300 // 5 minutos
+                    
+                    echo "🎯 Iniciando verificación del Quality Gate..."
+                    timeout(time: 15, unit: 'MINUTES') {
                         waitForQualityGate abortPipeline: true
                     }
                 }
             }
         }
+
+        stage('Package Application') {
+            steps {
+                sh '''
+                    echo "=== Empaquetando aplicación ==="
+                    mvn package -q -DskipTests
+                '''
+                archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: false
+            }
+        }
     }
-    
+
     post {
+        always {
+            echo "Pipeline Backend - Resultado: ${currentBuild.result}"
+            
+            // Limpieza opcional
+            sh '''
+                echo "=== Espacio utilizado ==="
+                du -h --max-depth=1 . || echo "No se pudo verificar espacio"
+            '''
+        }
         success {
-            echo 'Pipeline executat amb èxit!'
+            echo "✅ Pipeline Backend completado exitosamente!"
+            emailext (
+                subject: "✅ Pipeline Backend EXITOSO - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "El pipeline del backend se completó correctamente.\n\nVer build: ${env.BUILD_URL}",
+                to: "tu-email@dominio.com"  // Ajusta con tu email
+            )
         }
         failure {
-            echo 'Pipeline ha fallat. Revisa els logs.'
+            echo "❌ Pipeline Backend falló"
+            emailext (
+                subject: "❌ Pipeline Backend FALLIDO - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "El pipeline del backend ha fallado.\n\nVer build: ${env.BUILD_URL}",
+                to: "tu-email@dominio.com"  // Ajusta con tu email
+            )
+        }
+        unstable {
+            echo "⚠️ Pipeline Backend inestable (Quality Gate no pasado)"
         }
     }
 }
