@@ -4,6 +4,7 @@ pipeline {
     tools {
         maven 'my-maven'
         jdk 'my-jdk'
+    }
 
     environment {
         SONAR_SERVER_NAME = 'sonar-server'
@@ -26,7 +27,6 @@ pipeline {
             }
             post {
                 always {
-                    // Publicar resultados de tests JUnit
                     junit 'target/surefire-reports/**/*.xml'
                 }
             }
@@ -42,16 +42,7 @@ pipeline {
             }
             post {
                 always {
-                    // Archivar reporte de cobertura Jacoco
                     archiveArtifacts artifacts: 'target/site/jacoco/**/*', allowEmptyArchive: false
-                    
-                    // Publicar reporte de cobertura (opcional, para visualización en Jenkins)
-                    jacoco(
-                        execPattern: 'target/jacoco.exec',
-                        classPattern: 'target/classes',
-                        sourcePattern: 'src/main/java',
-                        exclusionPattern: 'src/test*'
-                    )
                 }
             }
         }
@@ -76,11 +67,7 @@ pipeline {
                 withSonarQubeEnv(SONAR_SERVER_NAME) {
                     sh '''
                         echo "=== Ejecutando análisis SonarQube ==="
-                        # Opción 1: Usar sonar-scanner directamente (recomendado)
                         "${SONAR_SCANNER}/bin/sonar-scanner" -X
-                        
-                        # Opción 2: Usar Maven (alternativa)
-                        # mvn sonar:sonar -Dsonar.token=${SONAR_AUTH_TOKEN}
                     '''
                 }
             }
@@ -90,10 +77,7 @@ pipeline {
             steps {
                 script {
                     echo "⏳ Esperando que SonarQube sincronice el estado del análisis..."
-                    
-                    // Espera larga para sincronización
-                    sleep 300 // 5 minutos
-                    
+                    sleep 300
                     echo "🎯 Iniciando verificación del Quality Gate..."
                     timeout(time: 15, unit: 'MINUTES') {
                         waitForQualityGate abortPipeline: true
@@ -116,28 +100,12 @@ pipeline {
     post {
         always {
             echo "Pipeline Backend - Resultado: ${currentBuild.result}"
-            
-            // Limpieza opcional
-            sh '''
-                echo "=== Espacio utilizado ==="
-                du -h --max-depth=1 . || echo "No se pudo verificar espacio"
-            '''
         }
         success {
             echo "✅ Pipeline Backend completado exitosamente!"
-            emailext (
-                subject: "✅ Pipeline Backend EXITOSO - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: "El pipeline del backend se completó correctamente.\n\nVer build: ${env.BUILD_URL}",
-                to: "tu-email@dominio.com"  // Ajusta con tu email
-            )
         }
         failure {
             echo "❌ Pipeline Backend falló"
-            emailext (
-                subject: "❌ Pipeline Backend FALLIDO - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: "El pipeline del backend ha fallado.\n\nVer build: ${env.BUILD_URL}",
-                to: "tu-email@dominio.com"  // Ajusta con tu email
-            )
         }
         unstable {
             echo "⚠️ Pipeline Backend inestable (Quality Gate no pasado)"
